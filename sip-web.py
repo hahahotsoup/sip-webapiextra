@@ -7,6 +7,11 @@ sip-web —— sip（RSS 阅读器）的本地 Web 界面与 HTTP 翻译层
 把浏览器的 Web 请求翻译成 sip CLI 调用（`sip <命令> --json`），
 再把 sip 的 JSON 输出原样返回给前端。
 
+⚠️ 测试软件声明：这是一个测试 / 实验性质的软件，没有安全功能。
+   无认证、无访问控制、无加密；任何能访问到服务端口的人都可以读写
+   你的 sip 数据。请只在本地开发环境使用，不要部署到公网。
+   使用风险自负。
+
 部署方式：把本文件（连同 index.html）放到 sip 可执行文件（sip.exe / sip）
 所在的文件夹里，运行：
 
@@ -15,11 +20,6 @@ sip-web —— sip（RSS 阅读器）的本地 Web 界面与 HTTP 翻译层
     python sip-web.py --sip /path/to/sip
 
 零第三方依赖，仅用 Python 标准库；Windows / macOS / Linux 通用。
-
-安全：
-- 默认只监听 127.0.0.1（本地优先，符合 sip 的产品理念）
-- 所有 sip 参数以列表形式传给子进程（不经 shell），并对命令做白名单校验
-- 超时保护：所有 CLI 调用都有超时上限，避免卡死
 """
 
 import argparse
@@ -458,6 +458,7 @@ def main():
     print(f"  Web 界面 : http://{args.host}:{args.port}")
     print(f"  sip 程序 : {sip_path}")
     print(f"  数据目录 : {os.path.join(translator.sip_dir, 'readwithhotsoup')}")
+    print("  ⚠ 测试软件 · 无安全功能 · 勿暴露到公网 · 使用风险自负")
     print(f"  按 Ctrl+C 退出")
     print("=" * 56)
 
