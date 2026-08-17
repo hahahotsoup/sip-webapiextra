@@ -120,8 +120,21 @@ class SipTranslator:
         return {"exit": r["exit"], "text": r["stdout"] or r["stderr"], "raw": r}
 
 
+# 不会被当作 sip 可执行文件的扩展名（同目录常驻的源码/文档/包等）
+_NON_EXEC_EXTS = {
+    ".zip", ".md", ".py", ".cs", ".json", ".txt", ".ps1", ".sh", ".yml",
+    ".yaml", ".dll", ".pdb", ".xml", ".toml", ".bundle", ".png", ".svg", ".html",
+}
+# 文件名前缀黑名单（本程序自己的文件、技能包等，避免误匹配）
+_NON_EXEC_PREFIXES = ("sip-web", "sip-skill", "sip-lang", "readme", "license", "changelog")
+
+
 def find_sip(explicit: str | None) -> str:
-    """查找 sip 可执行文件：优先 --sip 参数，其次本脚本同目录。"""
+    """查找 sip 可执行文件：优先 --sip 参数，其次本脚本同目录。
+
+    支持带版本号/平台后缀的命名（sip-1.2.0.exe、sip_v1.2.0_win-x64、
+    sip-linux-arm64 等）：精确名优先，其次按文件修改时间取最新的一个。
+    """
     if explicit:
         p = os.path.abspath(explicit)
         if os.path.isfile(p):
@@ -129,19 +142,45 @@ def find_sip(explicit: str | None) -> str:
         raise SystemExit(f"错误：--sip 指定的文件不存在：{p}")
 
     here = os.path.dirname(os.path.abspath(__file__))
+
+    # 1) 精确名优先
     for name in ("sip.exe", "sip", "sip.cmd", "sip.bat"):
         p = os.path.join(here, name)
         if os.path.isfile(p):
             return p
 
-    # 兜底：PATH 里的 sip
+    # 2) 模糊匹配：sip* 开头的可执行文件（带版本号/平台后缀），取最新
+    candidates = []
+    try:
+        for f in os.listdir(here):
+            low = f.lower()
+            if not low.startswith("sip"):
+                continue
+            if any(low.startswith(p) for p in _NON_EXEC_PREFIXES):
+                continue
+            full = os.path.join(here, f)
+            if not os.path.isfile(full):
+                continue
+            ext = os.path.splitext(low)[1]
+            if ext in _NON_EXEC_EXTS:
+                continue
+            # 可执行：.exe/.cmd/.bat，或无扩展名的裸文件（Linux/macOS 的 sip-*）
+            if ext in (".exe", ".cmd", ".bat") or ext == "":
+                candidates.append(full)
+    except OSError:
+        pass
+    if candidates:
+        candidates.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return candidates[0]
+
+    # 3) 兜底：PATH 里的 sip
     from shutil import which
     w = which("sip")
     if w:
         return w
 
     raise SystemExit(
-        "错误：在脚本同目录找不到 sip 可执行文件（sip.exe / sip）。\n"
+        "错误：在脚本同目录找不到 sip 可执行文件（sip.exe / sip / sip-*）。\n"
         f"请把本文件（连同 index.html）复制到 sip 所在的文件夹后再运行，\n"
         f"或用 --sip 指定 sip 的完整路径。当前脚本目录：{here}"
     )
