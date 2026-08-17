@@ -32,7 +32,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 DEFAULT_PORT = 8777
 CLI_TIMEOUT = 300          # 单次 CLI 调用超时（秒）；--search 跨源、--update-all 可能较慢
 HOST = "127.0.0.1"         # 本地优先：只监听本机回环地址
@@ -68,8 +68,9 @@ class SipTranslator:
         self.sip_dir = os.path.dirname(os.path.abspath(sip_path)) or "."
         self.timeout = timeout
 
-    def run(self, args: list[str], timeout: int | None = None) -> dict:
-        """执行 sip CLI，返回 {exit, stdout, stderr, raw}。"""
+    def run(self, args: list[str], timeout: int | None = None, input_text: str | None = None) -> dict:
+        """执行 sip CLI，返回 {exit, stdout, stderr, raw}。
+        input_text: 传给进程 stdin 的内容（如 ingest --stdin）。"""
         timeout = timeout or self.timeout
         if not os.path.isfile(self.sip_path):
             raise RuntimeError(f"找不到 sip 可执行文件：{self.sip_path}")
@@ -82,6 +83,7 @@ class SipTranslator:
                 errors="replace",
                 timeout=timeout,
                 cwd=self.sip_dir,
+                input=input_text,
             )
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"sip 调用超时（>{timeout}s）：{' '.join(args[:4])}…")
@@ -91,9 +93,9 @@ class SipTranslator:
         err = (proc.stderr or "").strip()
         return {"exit": proc.returncode, "stdout": out, "stderr": err}
 
-    def call_json(self, args: list[str], timeout: int | None = None) -> dict:
+    def call_json(self, args: list[str], timeout: int | None = None, input_text: str | None = None) -> dict:
         """执行并解析 JSON 输出；返回可直接回给前端的 dict。"""
-        r = self.run(args, timeout)
+        r = self.run(args, timeout, input_text=input_text)
         body = r["stdout"] or r["stderr"]
         try:
             data = json.loads(body)
@@ -416,6 +418,160 @@ class SipWebHandler(BaseHTTPRequestHandler):
             # ---------- API：AI 配置 ----------
             if method == "GET" and path == "/api/config":
                 self._send_json(t.call_json(["--config", "--ignoresafeannouncement"]))
+                return
+
+            # ---------- API：孟思琳(simon) 安全守护 ----------
+            if method == "GET" and path == "/api/simon":
+                self._send_json(t.call_json(["simon", "status", "--json", "--ignoresafeannouncement"]))
+                return
+
+            # ---------- API：跨源去重（--dedup） ----------
+            if path == "/api/dedup":
+                if method == "GET" and q.get("action", [""])[0] in ("", "list"):
+                    self._send_json(t.call_json(["--dedup", "list", "--json", "--ignoresafeannouncement"]))
+                    return
+                if method == "POST":
+                    body = self._read_json_body()
+                    act = body.get("action") or q.get("action", [""])[0]
+                    if act == "scan":
+                        self._send_json(t.call_json(["--dedup", "scan", "--json", "--ignoresafeannouncement"]))
+                    elif act == "hide":
+                        hidden = body.get("hiddenId") or body.get("hidden")
+                        canon = body.get("canonicalId") or body.get("canonical")
+                        if not hidden or not canon:
+                            self._send_json(_err(400, "缺少 hiddenId/canonicalId", "hide 需要 hiddenId 和 canonicalId"), 400)
+                            return
+                        self._send_json(t.call_json(["--dedup", "hide", str(hidden), str(canon), "--json", "--ignoresafeannouncement"]))
+                    elif act == "hide-cluster":
+                        rep = body.get("representativeId") or body.get("rep")
+                        if not rep:
+                            self._send_json(_err(400, "缺少 representativeId", "hide-cluster 需要簇代表 ID"), 400)
+                            return
+                        self._send_json(t.call_json(["--dedup", "hide-cluster", str(rep), "--json", "--ignoresafeannouncement"]))
+                    elif act == "undo":
+                        key = body.get("key")
+                        if not key:
+                            self._send_json(_err(400, "缺少 key", "undo 需要 dedup key"), 400)
+                            return
+                        self._send_json(t.call_json(["--dedup", "undo", str(key), "--json", "--ignoresafeannouncement"]))
+                    else:
+                        self._send_json(_err(400, f"未知 dedup 动作：{act}", "支持 scan/hide/hide-cluster/undo"), 400)
+                    return
+
+            # ---------- API：证据库（ingest，v1.2.0） ----------
+            if method == "GET" and path == "/api/ingest":
+                args = ["ingest", "list", "--json", "--ignoresafeannouncement"]
+                if q.get("stale", ["0"])[0] in ("1", "true"):
+                    args.insert(2, "--stale")
+                g = _int_param(q, "group")
+                if g is not None:
+                    args += ["--group", str(g)]
+                self._send_json(t.call_json(args))
+                return
+
+            if method == "POST" and path == "/api/ingest":
+                body = self._read_json_body()
+                text = (body.get("text") or "").strip()
+                if not text:
+                    self._send_json(_err(400, "缺少 text 参数", "请输入要保存的证据文本"), 400)
+                    return
+                args = ["ingest", "--stdin", "--yes", "--json", "--ignoresafeannouncement"]
+                if body.get("origin"):
+                    args += ["--origin", str(body["origin"])]
+                if body.get("producer"):
+                    args += ["--producer", str(body["producer"])]
+                if body.get("ttl"):
+                    args += ["--ttl", str(body["ttl"])]
+                self._send_json(t.call_json(args, input_text=text))
+                return
+
+            if method == "POST" and path == "/api/ingest/url":
+                body = self._read_json_body()
+                url = (body.get("url") or "").strip()
+                if not url:
+                    self._send_json(_err(400, "缺少 url 参数", "请输入要保存的网页地址"), 400)
+                    return
+                args = ["ingest", "--url", url, "--yes", "--json", "--ignoresafeannouncement"]
+                if body.get("ttl"):
+                    args += ["--ttl", str(body["ttl"])]
+                self._send_json(t.call_json(args))
+                return
+
+            if method == "GET" and path == "/api/ingest/retrieve":
+                kw = q.get("q", [""])[0].strip()
+                if not kw:
+                    self._send_json(_err(400, "缺少 q 参数", "请输入检索词"), 400)
+                    return
+                args = ["ingest", "retrieve", kw, "--json", "--ignoresafeannouncement"]
+                top = _int_param(q, "top")
+                g = _int_param(q, "group")
+                if top is not None:
+                    args += ["--top", str(top)]
+                if g is not None:
+                    args += ["--group", str(g)]
+                self._send_json(t.call_json(args))
+                return
+
+            if method == "POST" and path == "/api/ingest/ask":
+                body = self._read_json_body()
+                question = (body.get("question") or body.get("q") or "").strip()
+                if not question:
+                    self._send_json(_err(400, "缺少 question 参数", "请输入要问的问题"), 400)
+                    return
+                # ask 需要 LLM，可能较慢；给足超时
+                self._send_json(t.call_json(
+                    ["ingest", "ask", question, "--json", "--ignoresafeannouncement"], timeout=600))
+                return
+
+            if method == "GET" and path == "/api/ingest/groups":
+                self._send_json(t.call_json(["ingest", "groups", "--json", "--ignoresafeannouncement"]))
+                return
+
+            if method == "POST" and path == "/api/ingest/groups":
+                body = self._read_json_body()
+                label = (body.get("label") or "").strip()
+                if not label:
+                    self._send_json(_err(400, "缺少 label 参数", "请输入主题标签"), 400)
+                    return
+                args = ["ingest", "group", "add", label, "--ignoresafeannouncement"]
+                if body.get("seed"):
+                    args += ["--seed", str(body["seed"])]
+                self._send_json(t.call_json(args))
+                return
+
+            m = self._match(path, r"^/api/ingest/(\d+)(/.*)?$")
+            if m:
+                eid = m.group(1)
+                sub = m.group(2) or ""
+
+                if method == "GET" and sub == "":
+                    self._send_json(t.call_json(["ingest", "show", eid, "--json", "--ignoresafeannouncement"]))
+                    return
+
+                if method == "POST" and sub == "/refresh":
+                    self._send_json(t.call_json(["ingest", "refresh", eid, "--json", "--ignoresafeannouncement"]))
+                    return
+
+                if method == "POST" and sub == "/confirm":
+                    self._send_json(t.call_json(["ingest", "confirm", eid, "--ignoresafeannouncement"]))
+                    return
+
+                if method == "DELETE" and sub == "":
+                    self._send_json(t.call_json(["ingest", "rm", eid, "--yes", "--ignoresafeannouncement"]))
+                    return
+
+            if method == "POST" and path == "/api/ingest/refresh":
+                body = self._read_json_body()
+                target = body.get("target") or "stale"
+                args = ["ingest", "refresh"]
+                if target == "all":
+                    args += ["--all"]
+                elif str(target).isdigit():
+                    args += [str(target)]
+                else:
+                    args += ["--stale"]
+                args += ["--json", "--ignoresafeannouncement"]
+                self._send_json(t.call_json(args))
                 return
 
             # ---------- 兜底 ----------

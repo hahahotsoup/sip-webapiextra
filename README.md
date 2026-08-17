@@ -67,6 +67,9 @@ python sip-web.py
 | 📥 抓全文 | `sip --fulltext <id> --yes --json` |
 | 📜 版本历史 / ⇄ 改动对比 | `sip --versions <id>` / `sip --diff <id> --json` |
 | ✨ 生成摘要（需 AI 配置） | `sip --summary <id> --json` |
+| 🗃 证据库（存/查/问答/核实/刷新） | `sip ingest …`（v1.2.0「广开言路」） |
+| 🔒 孟思琳状态（挡位/加密） | `sip simon status --json` |
+| 🔁 跨源去重 | `sip --dedup scan/hide-cluster/list/undo` |
 
 ## HTTP API（翻译层）
 
@@ -96,6 +99,21 @@ GET    /api/search/grep?q=…            全文搜索（?feed=N&limit=N）
 GET    /api/search/semantic?q=…        语义搜索（?feed=N&threshold=0.7）
 GET    /api/today?refresh=1            今日哈汤
 GET    /api/config                     AI 配置状态
+GET    /api/simon                      孟思琳(simon) 状态（挡位/加密/拦截）
+GET    /api/dedup                      已隐藏的重复（?action=list）
+POST   /api/dedup             {action} 去重：scan / hide / hide-cluster / undo
+GET    /api/ingest                     证据列表（?stale=1&group=N）
+POST   /api/ingest            {text,origin,producer,ttl}   文本存为证据（stdin）
+POST   /api/ingest/url        {url,ttl}                    网页存为证据
+GET    /api/ingest/{id}                证据详情
+POST   /api/ingest/{id}/refresh        重查原文、追踪变化
+POST   /api/ingest/{id}/confirm        标记为已核实
+DELETE /api/ingest/{id}                删除证据（--yes）
+POST   /api/ingest/refresh   {target}  刷新（stale / all / 指定 id）
+GET    /api/ingest/retrieve?q=…        检索证据（?top=N&group=N）
+POST   /api/ingest/ask        {question}  证据问答（只摘录不转述，需 AI）
+GET    /api/ingest/groups              主题分组列表
+POST   /api/ingest/groups     {label,seed}  新建主题分组
 ```
 
 ## ⚠️ 已知限制（无安全功能）

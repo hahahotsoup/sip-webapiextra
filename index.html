@@ -202,6 +202,33 @@ mark { background: #f5d78e; border-radius: 3px; padding: 0 2px; }
 .today-item:hover { border-color: var(--accent); }
 .today-item .no { font-size: 20px; font-weight: 700; color: var(--accent); width: 34px; text-align: center; }
 .today-item .tt { font-weight: 600; }
+
+/* ---------- 证据库（ingest） ---------- */
+.ev { border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+  padding: 12px 14px; margin-bottom: 8px; }
+.ev .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ev .ex { margin-top: 6px; color: var(--ink2); font-size: 13.5px; white-space: pre-wrap;
+  max-height: 120px; overflow-y: auto; }
+.ev .ops { margin-top: 8px; display: flex; gap: 6px; }
+.ev .ops button { padding: 3px 10px; font-size: 12.5px; }
+.evfull { white-space: pre-wrap; font-size: 14px; line-height: 1.8; background: var(--bg2);
+  border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-top: 8px; }
+.addcard { display: flex; flex-direction: column; gap: 8px; }
+.addcard textarea { font: inherit; color: var(--ink); background: var(--bg2);
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; outline: none;
+  resize: vertical; min-height: 70px; }
+.addcard textarea:focus { border-color: var(--accent); }
+.addrow2 { display: flex; gap: 6px; flex-wrap: wrap; }
+.addrow2 input { flex: 1; min-width: 140px; }
+.askbox { display: flex; gap: 6px; }
+.askbox input { flex: 1; }
+.qa { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 14px 16px; margin-top: 10px; font-size: 14px; }
+.qa .q { color: var(--accent2); font-weight: 600; margin-bottom: 6px; }
+.qa .a { white-space: pre-wrap; line-height: 1.8; }
+.cluster { border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px;
+  margin-bottom: 8px; background: var(--card); }
+.cluster .rep { font-weight: 600; }
 .today-item .rs { margin-top: 4px; color: var(--ink2); font-size: 13px; }
 .today-item .mm { margin-top: 6px; color: var(--ink3); font-size: 12.5px; display: flex; gap: 12px; }
 .soup { font-size: 40px; text-align: center; padding: 26px 0 10px; }
@@ -242,6 +269,10 @@ mark { background: #f5d78e; border-radius: 3px; padding: 0 2px; }
         <button id="syncBtn" title="只更新到期的源">🔄 同步</button>
         <button id="updateAllBtn" title="强制更新所有源">⚡ 全更</button>
         <button id="likesBtn" title="收藏列表">♥</button>
+      </div>
+      <div class="toolrow">
+        <button id="evBtn" title="证据库（ingest）">🗃 证据库</button>
+        <button id="simonBtn" title="孟思琳安全守护状态">🔒 孟思琳</button>
       </div>
     </div>
   </aside>
@@ -746,6 +777,235 @@ async function loadLikes() {
   } catch (e) { main.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 
+/* ---------- 证据库（ingest，v1.2.0） ---------- */
+async function loadIngest() {
+  state.view = "ingest";
+  const main = $("#main");
+  main.innerHTML = `<div class="empty">加载中…</div>`;
+  try {
+    const r = await getJSON("/api/ingest");
+    const dd = r.data || {};
+    const items = dd.items || [];
+    main.innerHTML = `
+      <div class="pagehead"><h1>🗃 证据库</h1>
+        <span class="sub">${num(items.length)} 条证据 · 非 RSS 来源的沉淀（sip ingest）</span>
+        <span style="flex:1"></span>
+        <button id="evRefreshAll">♻ 刷新过期</button>
+      </div>
+      <div class="card addcard">
+        <b>＋ 存证据</b>
+        <textarea id="evText" placeholder="粘贴证据原文（如搜索结果 / 网页摘录）…"></textarea>
+        <div class="addrow2">
+          <input id="evOrigin" placeholder="来源 URL（可选）" />
+          <input id="evProducer" placeholder="生产者，如 argo（可选）" />
+          <button id="evAdd" class="primary">存入</button>
+        </div>
+        <div class="addrow2">
+          <input id="evUrl" placeholder="或直接存一个网页 URL…" />
+          <button id="evAddUrl">抓网页存入</button>
+        </div>
+      </div>
+      <div class="card addcard">
+        <b>🔍 检索证据（给 Agent 引用）</b>
+        <div class="askbox">
+          <input id="evRetrieveQ" placeholder="检索词…" />
+          <button id="evRetrieve">检索</button>
+        </div>
+        <div id="evRetrieveRes"></div>
+      </div>
+      <div class="card addcard">
+        <b>💬 证据问答（只摘录不转述，需 AI）</b>
+        <div class="askbox">
+          <input id="evAskQ" placeholder="问一个问题…" />
+          <button id="evAsk" class="primary">提问</button>
+        </div>
+        <div id="evAskRes"></div>
+      </div>
+      <div id="evList"></div>`;
+    $("#evRefreshAll").onclick = async () => {
+      toast("刷新中…");
+      await act(() => postJSON("/api/ingest/refresh", { target: "stale" }), "刷新完成");
+      loadIngest();
+    };
+    $("#evAdd").onclick = async () => {
+      const text = $("#evText").value.trim();
+      if (!text) { toast("请输入证据文本", "err"); return; }
+      const body = { text, origin: $("#evOrigin").value.trim(), producer: $("#evProducer").value.trim() };
+      await act(() => postJSON("/api/ingest", body), "证据已存入 ✓");
+      $("#evText").value = "";
+      loadIngest();
+    };
+    $("#evAddUrl").onclick = async () => {
+      const url = $("#evUrl").value.trim();
+      if (!url) { toast("请输入网页 URL", "err"); return; }
+      await act(() => postJSON("/api/ingest/url", { url }), "网页已存入 ✓");
+      $("#evUrl").value = "";
+      loadIngest();
+    };
+    $("#evRetrieve").onclick = () => runEvRetrieve();
+    $("#evRetrieveQ").addEventListener("keydown", e => { if (e.key === "Enter") runEvRetrieve(); });
+    $("#evAsk").onclick = () => runEvAsk();
+    $("#evAskQ").addEventListener("keydown", e => { if (e.key === "Enter") runEvAsk(); });
+    renderEvList(items);
+  } catch (e) { main.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+function renderEvList(items) {
+  const box = $("#evList");
+  if (!items.length) {
+    box.innerHTML = `<div class="empty">证据库还是空的 —— 把「会再用 / 会变且你在意 / 你确认过」的内容存进来</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="pagehead"><h1>📋 证据列表</h1></div>` +
+    items.map(ev => {
+      const id = ev.id;
+      const stale = ev.stale || ev.freshness === "stale";
+      return `<div class="ev" data-id="${id}">
+        <div class="head">
+          <b>#${id}</b>
+          <span class="muted">${esc(ev.source || "")}</span>
+          ${ev.verified ? '<span class="tag good">✓ 已核实</span>' : ""}
+          ${stale ? '<span class="tag warn">⏳ 已过期</span>' : ""}
+          ${ev.reversed ? '<span class="tag bad">🔴 反转</span>' : ""}
+          ${ev.grade ? `<span class="tag">${esc(ev.grade)}</span>` : ""}
+          ${ev.group ? `<span class="tag">#${esc(ev.group)}</span>` : ""}
+          <span style="flex:1"></span>
+          <span class="muted">${fmtTime(ev.capturedAt)}</span>
+        </div>
+        <div class="ex">${esc(ev.excerpt || "")}</div>
+        <div class="evfull" style="display:none"></div>
+        <div class="ops">
+          <button class="evShow">查看全文</button>
+          <button class="evRefresh">♻ 刷新</button>
+          <button class="evConfirm">✓ 核实</button>
+          <button class="evRm danger">🗑 删除</button>
+        </div>
+      </div>`;
+    }).join("");
+  box.querySelectorAll(".ev").forEach(row => {
+    const id = row.dataset.id;
+    row.querySelector(".evShow").onclick = async () => {
+      const full = row.querySelector(".evfull");
+      if (full.style.display === "none") {
+        full.style.display = "block";
+        full.textContent = "加载中…";
+        try {
+          const r = await getJSON(`/api/ingest/${id}`);
+          const dd = r.data || {};
+          full.textContent = dd.content || dd.excerpt || "(无内容)";
+          row.querySelector(".evShow").textContent = "收起";
+        } catch (e) { full.textContent = e.message; }
+      } else {
+        full.style.display = "none";
+        row.querySelector(".evShow").textContent = "查看全文";
+      }
+    };
+    row.querySelector(".evRefresh").onclick = async () => {
+      await act(() => postJSON(`/api/ingest/${id}/refresh`), `#${id} 已刷新`);
+      loadIngest();
+    };
+    row.querySelector(".evConfirm").onclick = async () => {
+      await act(() => postJSON(`/api/ingest/${id}/confirm`), `#${id} 已核实 ✓`);
+      loadIngest();
+    };
+    row.querySelector(".evRm").onclick = async () => {
+      if (!confirm(`删除证据 #${id}？`)) return;
+      await act(() => api(`/api/ingest/${id}`, { method: "DELETE" }), "已删除");
+      loadIngest();
+    };
+  });
+}
+
+async function runEvRetrieve() {
+  const q = $("#evRetrieveQ").value.trim();
+  const box = $("#evRetrieveRes");
+  if (!q) { toast("请输入检索词", "err"); return; }
+  box.innerHTML = `<div class="empty">检索中…</div>`;
+  try {
+    const r = await getJSON("/api/ingest/retrieve?q=" + encodeURIComponent(q));
+    const dd = r.data || {};
+    const hits = dd.hits || [];
+    if (!hits.length) { box.innerHTML = `<div class="empty">没有命中“${esc(q)}”</div>`; return; }
+    box.innerHTML = `<div class="resmeta">命中 ${num(hits.length)} 条（查询：${esc(dd.query || q)}）</div>` +
+      hits.map(h => {
+        const id = h.id;
+        const snip = h.snippet || h.excerpt || h.content || "";
+        return `<div class="hit" data-id="${id}">
+          <div class="t">#${id} · ${esc(h.title || h.source || "")}
+            ${h.hasDiff ? '<span class="tag warn">✎ 被改过</span>' : ""}
+            ${h.reversed ? '<span class="tag bad">🔴 反转</span>' : ""}
+            ${h.grade ? `<span class="tag">${esc(h.grade)}</span>` : ""}
+            <span class="muted">${h.sourceUrl ? ` · ${esc(h.sourceUrl)}` : ""}</span>
+          </div>
+          <div class="snips"><div>…${esc(snip)}…</div></div>
+        </div>`;
+      }).join("");
+    box.querySelectorAll(".hit").forEach(x => x.onclick = () => loadEvDetail(x.dataset.id));
+  } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+async function loadEvDetail(id) {
+  // 展开证据详情（在检索结果下追加）
+  const box = $("#evRetrieveRes");
+  try {
+    const r = await getJSON(`/api/ingest/${id}`);
+    const dd = r.data || {};
+    const old = document.getElementById("evDetail");
+    if (old) old.remove();
+    const div = document.createElement("div");
+    div.id = "evDetail";
+    div.className = "qa";
+    div.innerHTML = `<div class="q">📄 证据 #${id}（${esc(dd.source || "")}）</div>
+      <div class="a">${esc(dd.content || dd.excerpt || "(无内容)")}</div>`;
+    box.appendChild(div);
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function runEvAsk() {
+  const q = $("#evAskQ").value.trim();
+  const box = $("#evAskRes");
+  if (!q) { toast("请输入问题", "err"); return; }
+  box.innerHTML = `<div class="empty">思考中…（只从你的证据里摘录，需要 AI 配置）</div>`;
+  try {
+    const r = await postJSON("/api/ingest/ask", { question: q });
+    const dd = r.data || {};
+    const answer = dd.answer || dd.text || JSON.stringify(dd);
+    box.innerHTML = `<div class="qa"><div class="q">💬 ${esc(q)}</div><div class="a">${esc(answer)}</div></div>`;
+  } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
+/* ---------- 孟思琳(simon) 状态 ---------- */
+async function loadSimon() {
+  const main = $("#main");
+  main.innerHTML = `<div class="empty">加载中…</div>`;
+  try {
+    const r = await getJSON("/api/simon");
+    const dd = r.data || {};
+    const levelName = { 1: "1 · 常规（守护开启）", 2: "2 · 严格（CLI 写操作全拒）", 3: "3 · 最高（禁写 + 数据加密）" }[dd.level] || dd.level;
+    main.innerHTML = `
+      <div class="pagehead"><h1>🔒 孟思琳(simon)</h1>
+        <span class="sub">永远在岗的安全守护 · 默认开启 · 无法关闭</span></div>
+      <div class="statrow">
+        <div class="stat"><div class="v">${esc(String(dd.level))}</div><div class="k">挡位</div></div>
+        <div class="stat"><div class="v">${esc(dd.encryption || "off")}</div><div class="k">数据加密</div></div>
+        <div class="stat"><div class="v">${num(dd.repairs)}</div><div class="k">自动修复</div></div>
+        <div class="stat"><div class="v">${num(dd.blocked)}</div><div class="k">拦截次数</div></div>
+      </div>
+      <div style="height:14px"></div>
+      <div class="card">
+        <b>当前挡位：${esc(levelName)}</b>
+        <div style="margin-top:8px;color:var(--ink2);font-size:13.5px;line-height:1.9">
+          <div>· 挡位 1：常规守护（默认）—— 数据库完整性检查、SSRF/终端注入防护、非交互调用管控</div>
+          <div>· 挡位 2：严格 —— CLI 写操作一律拒绝（增删改源/归档/抓全文/去重隐藏等），只读命令可用</div>
+          <div>· 挡位 3：最高 —— 禁止一切写操作 + 全部数据加密（SQLCipher + AES），密钥存系统凭据库</div>
+          <div class="muted" style="margin-top:6px">⚠ 调挡位只能在 TUI 命令栏进行（CLI 降挡会被拒，AI 不代跑）</div>
+        </div>
+      </div>
+      ${(dd.recent || []).length ? `<div class="card"><b>最近事件</b><div style="margin-top:8px">${
+        dd.recent.map(x => `<div class="muted">${esc(String(x))}</div>`).join("")}</div></div>` : ""}`;
+  } catch (e) { main.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+
 /* ---------- 通用动作 ---------- */
 async function act(fn, okMsg) {
   try { await fn(); toast(okMsg, "good"); }
@@ -776,6 +1036,8 @@ $("#updateAllBtn").onclick = async () => {
   loadFeeds(true);
 };
 $("#likesBtn").onclick = () => loadLikes();
+$("#evBtn").onclick = () => loadIngest();
+$("#simonBtn").onclick = () => loadSimon();
 
 /* ---------- 启动 ---------- */
 refreshStatus();
